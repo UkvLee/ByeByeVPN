@@ -21,6 +21,9 @@
 #include "../scan/j3.h"
 #include "../scan/snitch.h"
 #include "../scan/ct.h"
+#include "../scan/utls.h"
+#include "../scan/tcpfp.h"
+#include "../scan/ja4.h"
 #include "../geoip/geoip.h"
 
 #include <algorithm>
@@ -133,6 +136,50 @@ FullReport run_full_target(const string& target) {
                        printable_prefix(o.banner, 60).c_str());
             }
             printf("\n");
+        }
+    }
+
+    // ---- 3b) TCP behavior fingerprint (v2.5.9) -------------------------
+    // probes the lowest open port for handshake-time distribution + SIO_TCP_INFO
+    // peer window/MSS + closed-port behavior. coarse OS guess only, no admin
+    // required, no raw socket, no extra fingerprint on the wire (just regular
+    // SOCK_STREAM connects, same shape as scan_tcp itself).
+    if (!R.open_tcp.empty()) {
+        // pick a closed port for the closed-port-behavior probe. prefer one
+        // whose scan classified as "refused" (RST), otherwise the highest-
+        // numbered timeout port. -1 if scan was skipped or all open.
+        int closed_hint = -1;
+        // very simple selection: 65000 if not in open set, else 1.
+        auto in_open = [&](int p){
+            for (auto& o: R.open_tcp) if (o.port == p) return true;
+            return false;
+        };
+        if (!in_open(65000)) closed_hint = 65000;
+        else if (!in_open(1)) closed_hint = 1;
+        TcpFp fp = tcp_fingerprint(R.dns.primary_ip, R.open_tcp.front().port, closed_hint);
+        R.tcp_fp = fp;
+        if (fp.ok) {
+            printf("\n%sTCP stack fingerprint%s  (handshake distribution + SIO_TCP_INFO)\n",
+                   col(C::BOLD), col(C::RST));
+            printf("  handshake median=%.1fms min=%.1fms max=%.1fms stddev=%.1fms (%d samples%s)\n",
+                   fp.handshake_median_ms, fp.handshake_min_ms, fp.handshake_max_ms,
+                   fp.handshake_stddev_ms, fp.samples_taken, fp.bimodal ? ", bimodal" : "");
+            if (fp.tcp_info_ok) {
+                printf("  peer recv-window: %d  MSS: %d\n", fp.peer_window, fp.peer_mss);
+            } else {
+                printf("  %sSIO_TCP_INFO: not available on this OS build%s\n",
+                       col(C::DIM), col(C::RST));
+            }
+            if (closed_hint > 0) {
+                printf("  closed-port :%d behavior: %s%s%s",
+                       closed_hint, col(C::CYN), fp.closed_port_behavior.c_str(), col(C::RST));
+                if (fp.closed_port_rtt_ms >= 0) printf(" (RTT %dms)", fp.closed_port_rtt_ms);
+                printf("\n");
+            }
+            printf("  %sOS guess:%s %s\n", col(C::BOLD), col(C::RST), fp.os_guess.c_str());
+        } else if (!fp.err.empty()) {
+            printf("\n%sTCP stack fingerprint%s: %s\n",
+                   col(C::BOLD), col(C::RST), fp.err.c_str());
         }
     }
 
@@ -297,6 +344,33 @@ FullReport run_full_target(const string& target) {
                         printf("        %s[alt-svc]%s  %s  (QUIC endpoint advertisement)\n",
                                col(C::DIM), col(C::RST),
                                printable_prefix(hp.alt_svc, 80).c_str());
+                }
+                // v2.5.9: chrome-flavored vs openssl-default dual handshake.
+                // detects JA3-adaptive servers (utls-aware reality, multi-stack
+                // CDN routers). two extra TLS handshakes per TLS port. results
+                // are stored on PortFp.utls and consumed in the verdict block.
+                {
+                    UtlsDualProbe ud = utls_dual_probe(R.dns.primary_ip, o.port, R.dns.host);
+                    pf.utls = ud;
+                    auto fmt_one = [&](const UtlsProbeResult& u) {
+                        printf("        %sJA4 (%s):%s ja4=%s ja4s=%s%s%s\n",
+                               col(C::DIM), u.flavor.c_str(), col(C::RST),
+                               u.ja4.empty()  ? "(parse-fail)" : u.ja4.c_str(),
+                               u.ja4s.empty() ? "(no SH)"      : u.ja4s.c_str(),
+                               u.handshake_completed ? "" : " [hs-fail: ",
+                               u.handshake_completed ? "" : (u.err + "]").c_str());
+                    };
+                    fmt_one(ud.openssl);
+                    fmt_one(ud.chrome);
+                    const char* col_v;
+                    if (ud.cert_differs || ud.only_chrome_ok || ud.only_openssl_ok)
+                        col_v = col(C::RED);
+                    else if (ud.ja4s_differs)
+                        col_v = col(C::YEL);
+                    else
+                        col_v = col(C::GRN);
+                    printf("        %sutls dual-probe:%s %s%s%s\n",
+                           col(C::BOLD), col(C::RST), col_v, ud.verdict.c_str(), col(C::RST));
                 }
             } else {
                 FpResult f; f.service = "TLS-FAIL";
@@ -859,6 +933,64 @@ FullReport run_full_target(const string& target) {
                        printable_prefix(pf.fp.redirect_target, 60) +
                        "') - tspu type A active block",
                        30);
+        }
+    }
+
+    // ---- v2.5.9 utls dual-probe signals --------------------------------
+    // when chrome-flavored and openssl-default handshakes diverge, the server
+    // is adapting to client JA3. that is the canonical reality / utls-aware
+    // proxy fingerprint, independent of cert content or fallback shape.
+    for (auto& pf: R.fps) {
+        if (!pf.utls) continue;
+        const UtlsDualProbe& u = *pf.utls;
+        if (u.cert_differs) {
+            flag_major("utls dual-probe on :" + std::to_string(pf.port) +
+                       " returned different certs for chrome-flavored vs openssl-default "
+                       "ClientHello (chrome sha256=" + u.chrome.cert_sha256.substr(0, 16) +
+                       "..., openssl sha256=" + u.openssl.cert_sha256.substr(0, 16) +
+                       "...). server steers cert by client fingerprint, classical reality "
+                       "with utls enforcement.", 22);
+        } else if (u.only_chrome_ok || u.only_openssl_ok) {
+            flag_major("utls dual-probe on :" + std::to_string(pf.port) +
+                       " accepted only one client flavor (" +
+                       (u.only_chrome_ok ? "chrome" : "openssl") +
+                       "), the other got handshake error. server filters TLS clients by "
+                       "fingerprint, hard reality / utls signature.", 18);
+        } else if (u.ja4s_differs) {
+            flag_minor("utls dual-probe on :" + std::to_string(pf.port) +
+                       " saw different ServerHello (JA4S) per client flavor (chrome=" +
+                       u.chrome.ja4s + ", openssl=" + u.openssl.ja4s + "). server adapts "
+                       "TLS parameters to client JA3, suggests utls-aware multi-stack "
+                       "frontend (CDN / smart router / reality-permissive setup).", 9);
+        }
+    }
+
+    // ---- v2.5.9 TCP behavior fingerprint signals -----------------------
+    // bimodal / high-stddev handshake distribution suggests a userspace TCP
+    // stack in path (TUN / sing-box-tun / xray's gvisor inbound). drop policy
+    // on closed ports is the operator-grade firewall signal (TSPU ACL drop).
+    if (R.tcp_fp && R.tcp_fp->ok) {
+        const TcpFp& fp = *R.tcp_fp;
+        if (fp.bimodal && fp.handshake_stddev_ms >= 25.0) {
+            flag_minor("tcp handshake distribution is bimodal "
+                       "(stddev " + std::to_string((int)fp.handshake_stddev_ms) +
+                       "ms over " + std::to_string(fp.samples_taken) +
+                       " samples). suggests a userspace TCP stack in path "
+                       "(TUN device / gvisor / sing-box-tun) rather than "
+                       "a kernel stack.", 6);
+        }
+        if (fp.closed_port_behavior == "drop") {
+            note("tcp-firewall-drop",
+                 "closed-port probe got no RST (drop policy). consistent with "
+                 "operator-grade firewall (TSPU ACL drop) or strict cloud SG. "
+                 "not a VPN signal on its own, but it tells us the network is "
+                 "filtered at L3 not just at the host stack.");
+        }
+        if (!fp.os_guess.empty() && fp.os_guess.find("userspace-stack-like") != string::npos) {
+            note("tcp-stack-userspace",
+                 "tcp_fingerprint os_guess: '" + fp.os_guess + "'. weak signal, "
+                 "but combined with TLS-on-high-port and silent-on-junk it tilts "
+                 "the verdict toward 'go-runtime / userspace TCP server'.");
         }
     }
 

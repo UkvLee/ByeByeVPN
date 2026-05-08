@@ -14,6 +14,8 @@
 #include "../scan/j3.h"
 #include "../scan/snitch.h"
 #include "../scan/ct.h"
+#include "../scan/utls.h"
+#include "../scan/tcpfp.h"
 
 #include <optional>
 #include <string>
@@ -41,6 +43,9 @@ struct FullReport {
         std::optional<J3Analysis>     j3a;
         std::optional<HttpsProbe>     https;
         std::optional<CtCheck>        ct;
+        // v2.5.9: per-port chrome-vs-openssl dual handshake. populated only
+        // for TLS-class ports (same gate as is_tls_port in the orchestrator).
+        std::optional<UtlsDualProbe>  utls;
     };
     std::vector<PortFp> fps;
 
@@ -55,6 +60,9 @@ struct FullReport {
     // v2.5.5 — scan-phase stats + blackhole detector
     ScanStats scan_stats;
     bool      bgp_blackhole_likely = false;
+
+    // v2.5.9 - per-host TCP behavior fingerprint (no admin, no raw socket).
+    std::optional<TcpFp> tcp_fp;
 
     // verdict
     int                      score = 0;

@@ -45,6 +45,9 @@ set(BBVPN_SOURCES
     src/scan/j3.cpp
     src/scan/snitch.cpp
     src/scan/ct.cpp
+    src/scan/ja4.cpp
+    src/scan/utls.cpp
+    src/scan/tcpfp.cpp
 
     src/local/local.cpp
 

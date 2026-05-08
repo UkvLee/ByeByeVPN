@@ -1,5 +1,114 @@
 # Changelog
 
+## v2.5.9 - 2026-05-08
+
+three new detection vectors. no payload changes to the wire shapes
+introduced in v2.5.8 and earlier; only fingerprint-side analysis on
+top of existing handshake bytes.
+
+### uTLS dual-probe + JA4 / JA4S (`src/scan/utls.{h,cpp}` + `src/scan/ja4.{h,cpp}`)
+
+per TLS port the orchestrator now opens TWO TLS handshakes:
+
+1. **chrome-flavored**: `SSL_CTX` configured to mimic Chrome 13x as
+   close as OpenSSL 3.x permits. cipher list ordering, supported
+   groups (`X25519:P-256:P-384:P-521`), sigalgs (`ECDSA+SHA256`,
+   `RSA-PSS+SHA256`, ...), ALPN (`h2,http/1.1`). still NOT byte-
+   identical to a real Chrome ClientHello (extension order is
+   OpenSSL's, no GREASE injection from us, no PSK resumption). good
+   enough to differ from default OpenSSL JA3 by cipher hash and
+   group order.
+2. **openssl-default**: same `TLS_client_method` other tool phases
+   use, no overrides.
+
+both probes capture the raw ClientHello and ServerHello bytes via
+`SSL_set_msg_callback` and feed them through `parse_client_hello` /
+`parse_server_hello` to produce JA4 (client) and JA4S (server)
+hashes per FoxIO spec (`https://github.com/FoxIO-LLC/ja4`).
+
+verdict signals:
+
+- **cert_differs**: server returned different certs for the two
+  client flavors → reality / utls-aware cert steering. hard signal
+  (`flag_major`, -22).
+- **only_chrome_ok / only_openssl_ok**: server completed one
+  handshake and rejected the other → strict utls enforcement.
+  hard signal (`flag_major`, -18).
+- **ja4s_differs**: both completed but ServerHello differs per
+  client flavor → utls-aware multi-stack frontend. soft signal
+  (`flag_minor`, -9).
+
+`PortFp` now carries `std::optional<UtlsDualProbe>` with the full
+result for both flavors (cert sha256, JA4, JA4S, captured bytes).
+
+### TCP stack fingerprint (`src/scan/tcpfp.{h,cpp}`)
+
+per host we now run a no-admin TCP behavior probe against the lowest
+open port from phase 3a:
+
+1. 6 sequential `tcp_connect` calls, drop top outlier, compute
+   median + min + max + stddev. bimodal / high-stddev distribution
+   suggests userspace TCP stack in path (TUN device, gvisor,
+   sing-box-tun, xray inbound over a TUN).
+2. one `WSAIoctl(SIO_TCP_INFO_v0)` call on a fresh socket. extracts
+   peer's advertised `SndWnd` and negotiated `Mss`. coarse OS hint
+   (linux nginx ~64240, win iis ~65535, go-runtime ~65535+wscale 7).
+3. one connect to a non-open port. classifies behavior as `rst-fast`
+   (kernel RST within 2x RTT), `rst-slow` (firewall in path), or
+   `drop` (operator ACL drop policy, common with TSPU at edges).
+
+verdict signals:
+
+- handshake stddev ≥ 25ms AND bimodal → soft signal `tcp handshake
+  distribution is bimodal` (-6).
+- closed-port `drop` → informational `tcp-firewall-drop`.
+- userspace-stack-like guess → informational `tcp-stack-userspace`.
+
+no raw socket. no Npcap / WinDivert dependency. no admin. SIO_TCP_INFO
+is a Windows 10 1703+ ioctl that exposes the local socket's view of
+the connection; the extracted `SndWnd` is **the peer's** advertised
+window (what we can send). `Mss` is the negotiated MSS as observed by
+our stack from the SYN-ACK. all probe traffic is plain SOCK_STREAM
+connect, byte-identical to phase 3a scan packets.
+
+### on-the-wire posture (issues #4 #5 carried forward)
+
+the new probes do NOT add tool-identifying bytes:
+
+- the chrome-flavored `SSL_CTX` differs from openssl-default in
+  parameter ORDERING only. no User-Agent, no custom extension, no
+  static SNI, no fixed session ID. SNI value is the target's
+  hostname (same as `tls_probe`).
+- ClientHello bytes are captured by `SSL_set_msg_callback` and stay
+  in-process. JA4 / JA4S are computed locally; nothing is exported.
+- TCP fingerprint module never sends a custom packet. just regular
+  `connect()` calls and one `WSAIoctl` on a local socket handle.
+
+CI (`.github/workflows/release.yml`) brand-string scan still passes
+with 1/3 matches (the `--help` printf in `src/app/cli.cpp`).
+
+### README
+
+- new "Prerequisites" section in both English and Russian, telling
+  the user to disable any active VPN / Zapret / GoodbyeDPI / proxy
+  on the host before scanning. otherwise SNITCH RTT is wrong, JA4
+  may be rewritten by a Zapret-class fragmentor mid-stream, and
+  GeoIP queries leave the host through the wrong exit IP.
+- pipeline tables show the new 3b and 5b rows.
+- on-the-wire posture section calls out that uTLS dual-probe and TCP
+  fingerprint introduce no new tool-identifying bytes.
+
+### internal
+
+- new files: `src/scan/ja4.{h,cpp}`, `src/scan/utls.{h,cpp}`,
+  `src/scan/tcpfp.{h,cpp}`. all three added to CMakeLists.txt and
+  Makefile SRC list.
+- `src/app/report.h::FullReport::PortFp` gained
+  `std::optional<UtlsDualProbe> utls`.
+- `src/app/report.h::FullReport` gained `std::optional<TcpFp> tcp_fp`.
+
+---
+
 ## v2.5.8 - 2026-05-08
 
 internal-only release. **no behaviour, no scoring, no on-the-wire payload

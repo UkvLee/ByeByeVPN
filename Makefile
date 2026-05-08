@@ -30,6 +30,9 @@ SRC := \
     src/scan/j3.cpp \
     src/scan/snitch.cpp \
     src/scan/ct.cpp \
+    src/scan/ja4.cpp \
+    src/scan/utls.cpp \
+    src/scan/tcpfp.cpp \
     src/local/local.cpp \
     src/app/target.cpp \
     src/app/orchestrator.cpp \
@@ -80,7 +83,7 @@ static: $(OBJ)
 # -----------------------------------------------------------------
 # release zip
 # -----------------------------------------------------------------
-VERSION ?= v2.5.8
+VERSION ?= v2.5.9
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static
