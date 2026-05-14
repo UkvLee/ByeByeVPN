@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.6.0 - 2026-05-13
+## v2.6.0 - 2026-05-14
 
 a focus release. the scope is narrowed to the modern signature-less
 tunnel set, the project picks up a real test + static-analysis pipeline,
@@ -74,34 +74,72 @@ scripts can branch without parsing output:
 64 usage error (no target)
 ```
 
-### infrastructure: tests, fuzzing, hardened CI
+### new: byte-accurate Chrome 131 ClientHello (`src/scan/chrome_ch.{h,cpp}`)
+
+the v2.5.9 uTLS dual-probe approximated the Chrome side by tweaking an
+OpenSSL `SSL_CTX` (cipher list, group order, sigalgs order). that is not
+a real Chrome hello: the extension order is OpenSSL's, there is no GREASE
+injection, no padding extension, no GREASE key_share. a uTLS-enforcing
+Reality server tells the two apart and the v2.5.9 probe could not.
+
+v2.6.0 hand-builds the actual wire bytes Chrome sends: GREASE values at
+the spec positions (cipher list, supported_groups, key_share,
+supported_versions, two bookend extensions), the Chrome extension set in
+order, a GREASE-prefixed x25519 key_share, and the padding extension
+sized the way BoringSSL sizes it. the random, the legacy session id, the
+key_share public value and the GREASE selections are randomized per call.
+the hello is sent over a raw socket and the server's plaintext
+ServerHello is read back directly.
+
+the "chrome accepted, openssl rejected" split is now a real signal: a
+server that answers a byte-accurate Chrome hello but drops the
+openssl-default one is enforcing a browser fingerprint profile. that is
+the main 2026 Reality detection technique. one extension is intentionally
+omitted (encrypted_client_hello / 0xfe0d): a GREASE ECH carries an
+HPKE-shaped body Chrome fills from its config cache, so a static one
+would be less accurate than none. the resulting JA4 is `t13d1516h2`, a
+real recent-Chrome fingerprint, never the openssl-default JA4.
+
+### infrastructure: tests, fuzzing, sanitizers, signed releases, hardened CI
 
 - `tests/` with doctest (single-header, MIT, not linked into the shipped
-  binary). 32 test cases / 164 assertions covering the platform-agnostic
+  binary). 33 test cases / 184 assertions covering the platform-agnostic
   logic: string helpers, the JA4 byte parsers + builders, the JA4S
-  classifier, the TSPU recognisers, the port-list builder, the brand
-  helpers. `make test`.
+  classifier, the Chrome ClientHello builder, the TSPU recognisers, the
+  port-list builder, the brand helpers. `make test`.
 - `fuzz/fuzz_ja4.cpp`: a libFuzzer harness for the JA4 byte parsers,
   which consume attacker-controlled handshake bytes. built under
   ASan + UBSan. `make fuzz`.
-- the platform-agnostic logic modules (`util`, `tspu`, `ja4`, `ja4s_db`,
-  `brand`, `ports`, `config`) are now cross-platform: the Windows-only
-  wide-char helpers are `#ifdef _WIN32`-guarded and `_stricmp` is
-  abstracted, so the test + analysis build runs on Linux.
-- the CI workflow gained a Linux `lint-and-test` job that runs cppcheck
-  (whole tree), the unit tests with `-Werror`, clang-tidy with
-  `--warnings-as-errors` on the agnostic modules, and a time-boxed
-  libFuzzer smoke pass. the Windows static-exe release job now gates on
-  that job passing.
+- `make test-asan`: the full unit-test suite under AddressSanitizer +
+  UndefinedBehaviorSanitizer with `-fno-sanitize-recover`, so any UB is
+  a hard failure. runs as its own Linux CI job; the Windows release
+  gates on it.
+- the platform-agnostic logic modules (`util`, `tspu`, `ja4`,
+  `chrome_ch`, `ja4s_db`, `brand`, `ports`, `config`) are now
+  cross-platform: the Windows-only wide-char helpers are `#ifdef
+  _WIN32`-guarded and `_stricmp` is abstracted, so the test + analysis
+  build runs on Linux.
+- the CI workflow runs a Linux `lint-and-test` job (cppcheck whole tree,
+  unit tests with `-Werror`, clang-tidy with `--warnings-as-errors` on
+  the agnostic modules, a time-boxed libFuzzer smoke pass), a Linux
+  `sanitizers` job (`test-asan`), and the Windows static-exe release job
+  which gates on both passing.
+- every release now ships `byebyevpn-sbom.json`, a CycloneDX 1.5
+  software bill of materials (exe sha, pinned OpenSSL package + sha,
+  compiler, source revision), and, when a `MINISIGN_SECRET_KEY` repo
+  secret is configured, minisign `.minisig` signatures on the exe, the
+  zip and the SBOM. the reproducible-archive verification from earlier
+  releases stays. see `BUILD.md`.
 - pre-existing `-Wunused` warnings were cleaned out so `-Werror` is
   green (NOMINMAX redefinition guard, dead `saw_other` / `phys_up` /
   three orchestrator counters).
 
 ### no on-the-wire fingerprint change
 
-the new probes do not add tool-identifying bytes. the AmneziaWG sweep
-sends only well-formed WG-shaped datagrams with randomized bodies. the
-JA4S classifier and the JSON serializer are pure in-process logic. the
+the new probes do not add tool-identifying bytes. the Chrome ClientHello
+builder emits exactly the bytes Chrome emits. the AmneziaWG sweep sends
+only well-formed WG-shaped datagrams with randomized bodies. the JA4S
+classifier and the JSON serializer are pure in-process logic. the
 brand-string audit grep still passes at 1 / 3 (only the `--help`
 printf).
 

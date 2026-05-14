@@ -4,6 +4,7 @@
 #include "doctest.h"
 #include "../src/scan/ja4.h"
 #include "../src/scan/ja4s_db.h"
+#include "../src/scan/chrome_ch.h"
 
 #include <cstdint>
 #include <vector>
@@ -177,4 +178,51 @@ TEST_CASE("ja4s_classify: exact seed hit vs structural fallback") {
     CHECK(bad.confidence == "unknown");
     Ja4sInfo empty = ja4s_classify("");
     CHECK(empty.confidence == "unknown");
+}
+
+TEST_CASE("build_chrome131_clienthello is a well-formed Chrome ClientHello") {
+    auto rec = build_chrome131_clienthello("example.com");
+
+    // TLS plaintext record header: handshake (0x16), legacy version 0x0301.
+    REQUIRE(rec.size() > 5);
+    CHECK(rec[0] == 0x16);
+    CHECK(rec[1] == 0x03);
+    CHECK(rec[2] == 0x01);
+    size_t rec_len = ((size_t)rec[3] << 8) | rec[4];
+    CHECK(rec_len == rec.size() - 5);
+
+    // the handshake message (record payload) must parse as a ClientHello.
+    const uint8_t* hs = rec.data() + 5;
+    size_t hs_len = rec.size() - 5;
+    CHECK(hs[0] == 0x01);  // HandshakeType client_hello
+
+    ClientHelloFp ch;
+    REQUIRE(parse_client_hello(hs, hs_len, ch));
+    REQUIRE(ch.ok);
+
+    // GREASE injected: the parser strips it but flags that it saw it.
+    CHECK(ch.has_grease);
+    CHECK(ch.has_sni);
+    CHECK(ch.sni == "example.com");
+    CHECK(ch.alpn_first == "h2");
+    CHECK(ch.real_version == 0x0304);
+
+    // 15 real cipher suites (GREASE-stripped) and 16 real extensions
+    // (GREASE-stripped) -> the canonical recent-Chrome JA4 a-part.
+    CHECK(ch.ciphers.size() == 15);
+    CHECK(ch.extensions.size() == 16);
+
+    std::string ja4 = ja4_client(ch);
+    CHECK(ja4.rfind("t13d1516h2_", 0) == 0);
+
+    // padding extension (0x0015) pushed the hello into Chrome's size band.
+    CHECK(hs_len >= 256);
+
+    // each call re-randomizes the GREASE / random / key_share, so two
+    // builds differ byte-for-byte but yield the same JA4 (GREASE-stripped).
+    auto rec2 = build_chrome131_clienthello("example.com");
+    CHECK(rec2 != rec);
+    ClientHelloFp ch2;
+    REQUIRE(parse_client_hello(rec2.data() + 5, rec2.size() - 5, ch2));
+    CHECK(ja4_client(ch2) == ja4);
 }

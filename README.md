@@ -73,7 +73,7 @@ observer, the way an ISP or DPI middlebox sees it.
 | 4  | UDP probes                      | WireGuard / AmneziaWG / Hysteria2 handshakes                            |
 | 4b | AmneziaWG S1 deep-probe (v2.6.0)| Junk-prefix size sweep on :51820, recovers the configured S1 parameter  |
 | 5  | Service fingerprint + CT        | SSH, HTTP, TLS + SNI consistency, SOCKS5, CONNECT, Shadowsocks, crt.sh, proxy-header leak |
-| 5b | uTLS dual-probe + JA4 + JA4S    | Two TLS handshakes per TLS port (chrome-flavored ctx vs openssl-default), JA4 / JA4S extracted from raw CH/SH bytes, JA4S classified against a backend-stack table |
+| 5b | uTLS dual-probe + JA4 + JA4S    | Two ClientHellos per TLS port (byte-accurate Chrome 131 vs openssl-default), JA4 / JA4S extracted from raw CH/SH bytes, JA4S classified against a backend-stack table |
 | 6  | J3 / TSPU active probing        | 8 probes per TLS port (Reality discriminator)                           |
 | 7  | SNITCH + traceroute + SSTP      | RTT vs GeoIP (methodika §10.1), ICMP hop-count, Microsoft SSTP          |
 | 8  | Verdict + TSPU emulation        | Score 0-100, stack identification, 3-tier TSPU ruling, hardening advice |
@@ -167,14 +167,18 @@ ICMP traceroute payload is the standard Windows `ping.exe` pattern
 (`abcdefghi...`, 32 bytes) - byte-identical to what any Windows box
 emits.
 
-The uTLS dual-probe (v2.5.9+) adds two extra TLS handshakes per TLS
-port. Both use real OpenSSL contexts; neither sends tool-identifying
-bytes. The "chrome-flavored" ctx differs from default by cipher list,
-supported groups, sigalgs, and ALPN ordering only. SNI value is the
-target's hostname (same as the existing `tls_probe`). ClientHello
-bytes captured by `SSL_set_msg_callback` stay in-process; nothing is
-exported. JA4 / JA4S hashes are computed locally over the captured
-bytes and never transmitted.
+The uTLS dual-probe (v2.6.0) sends two different ClientHellos per TLS
+port. The "chrome" side is a byte-accurate Chrome 131 ClientHello built
+by hand (`src/scan/chrome_ch.cpp`): GREASE at the spec positions, the
+Chrome extension set in order, a GREASE-prefixed x25519 key_share, the
+padding extension. It is exactly the bytes Chrome sends, not a tweaked
+OpenSSL context, so it carries no tool-identifying bytes - a uTLS
+fingerprint check sees Chrome. The "openssl" side is the default
+OpenSSL ClientHello, same as the existing `tls_probe`. SNI is the
+target's hostname in both. ClientHello / ServerHello bytes stay
+in-process; JA4 / JA4S hashes are computed locally and never
+transmitted. The "chrome accepted, openssl rejected" split is the
+uTLS-enforcement signal.
 
 The TCP stack fingerprint (3b) does not change anything on the wire.
 It runs 6 sequential `SOCK_STREAM` connects to an already-known open
@@ -300,9 +304,12 @@ release's notes for verification.
 - Cloudflare WARP / CGNAT / corporate proxies can ACK every port
   with identical RTT. The tool detects this (>60 ports with RTT
   variance <80ms) and warns.
-- TLS JA3 is OpenSSL-default, not uTLS-Chrome. Reality servers
-  in strict uTLS-enforcing mode would reject the handshake. Noted
-  in the output as an advisory.
+- The uTLS dual-probe sends a byte-accurate Chrome 131 ClientHello
+  (so a strict uTLS-enforcing Reality server accepts it) but the
+  raw-socket path does not run the TLS 1.3 key schedule, so it has
+  no peer cert for the Chrome side - cert-steering detection still
+  relies on the openssl-side handshake. The main `tls_probe` JA3 is
+  still OpenSSL-default; this is noted in the output as an advisory.
 - QUIC probes are version-negotiation only - no derived-key
   handshake. Enough to verify port liveness, not to fingerprint
   the specific QUIC stack.
@@ -363,7 +370,7 @@ score детектируемости, определённый стек, и ре
 | 4  | UDP probes                       | Handshake'и WireGuard / AmneziaWG / Hysteria2                          |
 | 4b | AmneziaWG S1 deep-probe (v2.6.0) | Sweep размера junk-prefix на :51820, восстанавливает настроенный S1    |
 | 5  | Service fingerprint + CT         | SSH, HTTP, TLS + SNI consistency, SOCKS5, CONNECT, Shadowsocks, crt.sh, proxy-headers |
-| 5b | uTLS dual-probe + JA4 + JA4S     | По два TLS handshake на TLS-порт (chrome-flavored ctx vs openssl-default), JA4 / JA4S из захваченных байт CH/SH, JA4S классифицируется по таблице стеков |
+| 5b | uTLS dual-probe + JA4 + JA4S     | По два ClientHello на TLS-порт (байт-в-байт Chrome 131 vs openssl-default), JA4 / JA4S из захваченных байт CH/SH, JA4S классифицируется по таблице стеков |
 | 6  | J3 / ТСПУ active probing         | 8 probe'ов на каждый TLS-порт (Reality discriminator)                 |
 | 7  | SNITCH + traceroute + SSTP       | RTT vs GeoIP (§10.1), ICMP hop-count, Microsoft SSTP                  |
 | 8  | Verdict + эмуляция ТСПУ          | Score 0-100, определение стека, 3-tier вердикт ТСПУ, hardening        |
@@ -570,8 +577,12 @@ pinned msys2 образа. SHA256 exe и zip печатаются в release not
 - Cloudflare WARP / CGNAT / корпоративный proxy могут ACK'ать любой
   порт с одинаковым RTT. Программа детектит это (>60 портов с
   variance < 80 мс) и выводит warning.
-- TLS JA3 = OpenSSL default, не uTLS-Chrome. Reality с жёстким
-  uTLS-enforcement отклонит handshake. Отмечено в выводе как advisory.
+- uTLS dual-probe шлёт байт-в-байт точный Chrome 131 ClientHello
+  (поэтому Reality с жёстким uTLS-enforcement его примет), но
+  raw-socket путь не гоняет TLS 1.3 key schedule, так что для
+  Chrome-стороны нет сертификата peer'а - детект cert-steering
+  всё ещё опирается на openssl-handshake. JA3 основного `tls_probe`
+  по-прежнему OpenSSL-default, отмечено в выводе как advisory.
 - QUIC probe - только version negotiation. Достаточно чтобы
   проверить liveness порта, не достаточно чтобы идентифицировать
   конкретный QUIC-стек.

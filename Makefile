@@ -31,6 +31,7 @@ SRC := \
     src/scan/snitch.cpp \
     src/scan/ct.cpp \
     src/scan/ja4.cpp \
+    src/scan/chrome_ch.cpp \
     src/scan/utls.cpp \
     src/scan/tcpfp.cpp \
     src/scan/ja4s_db.cpp \
@@ -115,6 +116,7 @@ TEST_SRC := \
     src/common/util.cpp \
     src/common/tspu.cpp \
     src/scan/ja4.cpp \
+    src/scan/chrome_ch.cpp \
     src/scan/ja4s_db.cpp \
     src/scan/brand.cpp \
     src/scan/ports.cpp \
@@ -123,6 +125,15 @@ TEST_SRC := \
 test: $(TEST_SRC)
 	$(CXX) -std=c++20 -O1 -g -Wall -Wextra -Itests $(TEST_SRC) -lcrypto -o byebyevpn-tests
 	./byebyevpn-tests
+
+# same test-suite under AddressSanitizer + UndefinedBehaviorSanitizer.
+# -fno-sanitize-recover makes any UBSan finding a hard failure, not a warning,
+# so a green run here is a real "no memory / no UB" guarantee.
+test-asan: $(TEST_SRC)
+	$(CXX) -std=c++20 -O1 -g -Wall -Wextra -Itests \
+	    -fsanitize=address,undefined -fno-sanitize-recover=all \
+	    $(TEST_SRC) -lcrypto -o byebyevpn-tests-asan
+	./byebyevpn-tests-asan
 
 # -----------------------------------------------------------------
 # libFuzzer harness for the JA4 byte parsers (clang only).
@@ -134,7 +145,7 @@ fuzz: fuzz/fuzz_ja4.cpp src/scan/ja4.cpp
 
 clean:
 	rm -f $(OBJ) $(WIN_OBJ) $(BIN) $(BIN)-static $(BIN).exe $(BIN)-*-win64.zip $(BIN)-win64.zip
-	rm -f byebyevpn-tests fuzz_ja4
+	rm -f byebyevpn-tests byebyevpn-tests-asan fuzz_ja4 byebyevpn-sbom.json
 	rm -rf dist-release
 
-.PHONY: all windows windows-static static release-zip install clean test fuzz
+.PHONY: all windows windows-static static release-zip install clean test test-asan fuzz

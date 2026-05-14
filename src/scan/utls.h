@@ -1,28 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // dual-flavored TLS handshake probe.
 //
-// per port the orchestrator runs TWO TLS handshakes:
-//   * "chrome-flavored": SSL_CTX customized to mimic Chrome 13x ClientHello as
-//     close as OpenSSL 3.x permits (cipher list, supported groups, sigalgs,
-//     ALPN, TLS 1.3 only). still NOT byte-identical to a real Chrome hello
-//     (extension order is OpenSSL's, no GREASE injection by us, no PSK
-//     resumption). good enough to differ from default OpenSSL JA3 by at least
-//     the cipher hash and the group order.
-//   * "openssl-default": the same ctx the rest of the tool uses
-//     (TLS_client_method, no extra options).
+// per port the orchestrator runs TWO TLS handshakes from two different
+// ClientHello fingerprints:
+//   * "chrome": a byte-accurate Chrome 131 ClientHello (see chrome_ch.h) sent
+//     over a raw socket. GREASE at the spec positions, the Chrome extension
+//     set, GREASE key_share, padding extension. handshake_completed here
+//     means the server answered with a real ServerHello (not an alert, not
+//     HelloRetryRequest) i.e. it accepted the Chrome fingerprint. the TLS 1.3
+//     key schedule is not run, so this flavor has no peer cert.
+//   * "openssl": the same OpenSSL ctx the rest of the tool uses
+//     (TLS_client_method, no extra options). full handshake, so it does
+//     recover the peer cert.
 //
-// for each handshake we capture the raw ClientHello bytes (what we sent)
-// and ServerHello bytes (what the server returned) via SSL_set_msg_callback,
-// then feed them through ja4.h to produce JA4 and JA4S.
+// for each probe we capture the raw ClientHello bytes (what we sent) and the
+// ServerHello bytes (what the server returned), then feed them through ja4.h
+// to produce JA4 and JA4S.
 //
 // the diff is the diagnostic:
+//   * chrome accepted, openssl rejected -> server enforces a uTLS / browser
+//     fingerprint profile (the main 2026 Reality detection signal).
 //   * different JA4S between the two flavors -> server adapts its ServerHello
 //     to client JA3 -> reality / utls-aware steering.
-//   * different cert sha256 between the two -> server returns different cert
-//     for chrome-class clients vs default-openssl clients -> hard reality
-//     enforcement.
-//   * one handshake fails (alert/RST), other succeeds -> server filters by
-//     client fingerprint -> strict utls enforcement.
+//   * different cert sha256 (only observable when both complete via the
+//     openssl path) -> hard reality cert enforcement.
 #pragma once
 
 #include "ja4.h"

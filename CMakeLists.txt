@@ -46,6 +46,7 @@ set(BBVPN_SOURCES
     src/scan/snitch.cpp
     src/scan/ct.cpp
     src/scan/ja4.cpp
+    src/scan/chrome_ch.cpp
     src/scan/utls.cpp
     src/scan/tcpfp.cpp
     src/scan/ja4s_db.cpp

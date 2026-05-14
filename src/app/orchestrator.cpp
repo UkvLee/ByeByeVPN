@@ -356,10 +356,10 @@ FullReport run_full_target(const string& target) {
                                col(C::DIM), col(C::RST),
                                printable_prefix(hp.alt_svc, 80).c_str());
                 }
-                // v2.5.9: chrome-flavored vs openssl-default dual handshake.
-                // detects JA3-adaptive servers (utls-aware reality, multi-stack
-                // CDN routers). two extra TLS handshakes per TLS port. results
-                // are stored on PortFp.utls and consumed in the verdict block.
+                // v2.6.0: byte-accurate Chrome 131 ClientHello vs openssl-default
+                // dual probe. detects JA3-adaptive servers (utls-aware reality,
+                // multi-stack CDN routers). two extra handshakes per TLS port.
+                // results are stored on PortFp.utls, consumed in the verdict block.
                 {
                     UtlsDualProbe ud = utls_dual_probe(R.dns.primary_ip, o.port, R.dns.host);
                     pf.utls = ud;

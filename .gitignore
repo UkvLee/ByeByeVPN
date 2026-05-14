@@ -20,6 +20,14 @@ out/
 byebyevpn
 byebyevpn.exe
 byebyevpn-static
+byebyevpn-tests
+byebyevpn-tests.exe
+byebyevpn-tests-asan
+byebyevpn-tests-asan.exe
+fuzz_ja4
+fuzz_ja4.exe
+byebyevpn-sbom.json
+*.minisig
 dist/byebyevpn
 dist/byebyevpn.exe
 dist/*.dll
