@@ -63,11 +63,17 @@ jobs:
           # bugprone-* and clang-analyzer-* are the real-bug families. they
           # gate the build (--warnings-as-errors). the broader modernize-* /
           # readability-* opinion layers are intentionally NOT enabled.
+          # bugprone-easily-swappable-parameters is excluded too: it is a
+          # design-opinion check that flags any two same-typed params, not
+          # a bug finder.
+          CHECKS='-*,bugprone-*,clang-analyzer-*'
+          CHECKS="$CHECKS,-clang-analyzer-optin.*"
+          CHECKS="$CHECKS,-bugprone-easily-swappable-parameters"
           for f in src/common/util.cpp src/common/tspu.cpp src/common/config.cpp \
                    src/scan/ja4.cpp src/scan/ja4s_db.cpp src/scan/brand.cpp \
                    src/scan/ports.cpp; do
             clang-tidy --quiet \
-              --checks='-*,bugprone-*,clang-analyzer-*,-clang-analyzer-optin.*' \
+              --checks="$CHECKS" \
               --warnings-as-errors='*' \
               "$f" -- -std=c++20 -Isrc
           done

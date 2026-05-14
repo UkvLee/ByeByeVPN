@@ -152,11 +152,11 @@ double percentile(vector<double> v, double pct) {
     if (v.empty()) return 0.0;
     std::sort(v.begin(), v.end());
     size_t n = v.size();
-    double idx = pct * (n - 1);
+    double idx = pct * static_cast<double>(n - 1);
     size_t lo = (size_t)std::floor(idx);
     size_t hi = (size_t)std::ceil(idx);
     if (lo == hi) return v[lo];
-    double frac = idx - lo;
+    double frac = idx - static_cast<double>(lo);
     return v[lo] * (1 - frac) + v[hi] * frac;
 }
 
