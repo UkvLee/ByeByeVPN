@@ -229,26 +229,29 @@ UtlsProbeResult run_chrome_raw(const string& ip, int port, const string& sni, in
                 } else {
                     r.err = "tls alert";
                 }
-            } else if (rt == 0x16 /* handshake */ && buf.size() >= 5 + reclen
-                       && reclen >= 4) {
-                const uint8_t* hp = buf.data() + 5;
-                if (hp[0] == 0x02 /* ServerHello */) {
-                    size_t mlen = ((size_t)hp[1] << 16) | ((size_t)hp[2] << 8) | hp[3];
-                    if (4 + mlen <= reclen) {
-                        r.sh_bytes.assign(hp, hp + 4 + mlen);
-                        bool is_hrr = mlen >= 34
-                            && std::memcmp(hp + 6, HRR_RANDOM, 32) == 0;
-                        if (is_hrr) {
-                            r.err = "HelloRetryRequest "
-                                    "(server could not satisfy the Chrome key_share)";
+            } else if (rt == 0x16 /* handshake */) {
+                if (buf.size() < 5 + reclen || reclen < 4) {
+                    r.err = "truncated handshake record";
+                } else {
+                    const uint8_t* hp = buf.data() + 5;
+                    if (hp[0] == 0x02 /* ServerHello */) {
+                        size_t mlen = ((size_t)hp[1] << 16) | ((size_t)hp[2] << 8) | hp[3];
+                        if (4 + mlen <= reclen) {
+                            r.sh_bytes.assign(hp, hp + 4 + mlen);
+                            bool is_hrr = mlen >= 34
+                                && std::memcmp(hp + 6, HRR_RANDOM, 32) == 0;
+                            if (is_hrr) {
+                                r.err = "HelloRetryRequest "
+                                        "(server could not satisfy the Chrome key_share)";
+                            } else {
+                                r.handshake_completed = true;
+                            }
                         } else {
-                            r.handshake_completed = true;
+                            r.err = "truncated ServerHello";
                         }
                     } else {
-                        r.err = "truncated ServerHello";
+                        r.err = "unexpected handshake message type";
                     }
-                } else {
-                    r.err = "unexpected handshake message type";
                 }
             } else {
                 r.err = "unexpected record type";
