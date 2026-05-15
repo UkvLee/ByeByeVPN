@@ -218,12 +218,18 @@ CT-log lookups.
 Linux / macOS: run through Wine. Everything except `local`
 (host-side adapter enumeration) works identically.
 
+Verify what you downloaded: every release ships a SHA256 in the
+release notes, a CycloneDX SBOM (`byebyevpn-sbom.json`), and -
+when the project signing key is configured - matching `.minisig`
+signatures. See `BUILD.md` for the verify recipe.
+
 ### CLI
 
 ```bash
 byebyevpn                        # interactive menu
 byebyevpn <host>                 # full scan
 byebyevpn scan 1.2.3.4           # same, explicit
+byebyevpn <host> --json          # full scan, JSON on stdout (v2.6.0)
 byebyevpn ports my.server.ru     # tcp scan only
 byebyevpn udp my.server.ru       # udp probes only
 byebyevpn tls my.server.ru 443   # tls + sni consistency
@@ -232,6 +238,15 @@ byebyevpn geoip 8.8.8.8          # geoip aggregation
 byebyevpn snitch my.server.ru    # rtt vs geo (methodika §10.1)
 byebyevpn trace my.server.ru     # icmp hop-count
 byebyevpn local                  # scan this machine
+```
+
+A completed full scan exits with the verdict tier so wrapper scripts
+can branch without parsing output (v2.6.0):
+
+```
+0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
+1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+64 usage error (no target)
 ```
 
 Hostnames are resolved via `getaddrinfo`; IPv4 is always preferred,
@@ -491,12 +506,18 @@ Windows: скачать `byebyevpn-v2.6.0-win64.zip` со страницы
 Linux / macOS: через Wine. Всё кроме `local` (адаптеры хоста)
 работает идентично.
 
+Проверка скачанного: каждый релиз идёт с SHA256 в release notes,
+CycloneDX-SBOM (`byebyevpn-sbom.json`) и - когда выставлен ключ
+подписи проекта - с `.minisig` подписями. Рецепт верификации в
+`BUILD.md`.
+
 ### CLI
 
 ```bash
 byebyevpn                        # интерактивное меню
 byebyevpn <host>                 # полный скан
 byebyevpn scan 1.2.3.4           # то же, явно
+byebyevpn <host> --json          # полный скан, JSON в stdout (v2.6.0)
 byebyevpn ports my.server.ru     # только tcp
 byebyevpn udp my.server.ru       # только udp
 byebyevpn tls my.server.ru 443   # TLS + SNI consistency
@@ -505,6 +526,15 @@ byebyevpn geoip 8.8.8.8          # GeoIP
 byebyevpn snitch my.server.ru    # RTT vs geo (§10.1)
 byebyevpn trace my.server.ru     # ICMP hop-count
 byebyevpn local                  # сканировать свою машину
+```
+
+Завершённый full scan выходит с кодом по уровню вердикта, чтобы
+обёртки могли ветвиться без парсинга вывода (v2.6.0):
+
+```
+0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
+1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+64 ошибка использования (нет цели)
 ```
 
 Hostname резолвится через `getaddrinfo`; IPv4 выбирается всегда, а
